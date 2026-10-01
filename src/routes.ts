@@ -296,11 +296,11 @@ const COOKIE_MAX_AGE_SEC = 365 * 24 * 60 * 60
  * The cookieless device credential: pass the device id from the /pair-app
  * URL into sessionStorage (and localStorage for tab reloads) before any app
  * script runs - same key the boot patch and the channel gate read. The
- * replaceState to '/' hides the credential URL from the address bar and
- * leaves the SPA at its canonical root path. The reopen service worker is
- * registered in the same breath: later navigations to '/' (history,
- * bookmark, tab restore) must not fall through to the harness index gate,
- * which the cookieless flow can never satisfy.
+ * replaceState hides the credential URL from the address bar. On a secure
+ * origin it parks on the SPA's canonical '/' (the reopen service worker owns
+ * later navigations there); on a plain-HTTP LAN origin, where no worker can
+ * exist, it parks on the tokenless landing path this server answers itself,
+ * so a refresh is never the harness index gate's 401.
  */
 export const APP_DEVICE_STORAGE_KEY = 'dsh-remote-device'
 
@@ -308,7 +308,16 @@ export function appShellCaptureScript(deviceId: string): string {
   const safeId = JSON.stringify(deviceId)
   const grantGlobal = JSON.stringify(REMOTE_HOST_GRANT_GLOBAL)
   const register = `try{if('serviceWorker' in navigator){navigator.serviceWorker.register(${JSON.stringify(PAIR_PATHS.appServiceWorker)},{scope:'/'}).catch(function(e){})}}catch(e){}`
-  return `<script>(function(){try{sessionStorage.setItem(${JSON.stringify(APP_DEVICE_STORAGE_KEY)},${safeId});}catch(e){}try{history.replaceState(null,'','/')}catch(e){}try{window[${grantGlobal}]=true}catch(e){}${register}})()</script>`
+  // Where the address bar parks after boot. '/' is the SPA's canonical path and
+  // the reopen service worker owns later navigations to it — but a worker only
+  // exists in a secure context, and a plain-HTTP LAN origin is not one. There a
+  // parked '/' turns every refresh (tab restore, bookmark, pull-to-refresh) into
+  // the harness browser-auth 401, which the cookieless mobile flow can never
+  // satisfy. On those origins the bar stays on the tokenless landing path
+  // instead: this server answers it for the device cookie / the approved
+  // address, so a refresh is just another successful landing.
+  const parkAt = `(window.isSecureContext===true&&'serviceWorker' in navigator)?'/':${JSON.stringify(PAIR_PATHS.appPage)}`
+  return `<script>(function(){try{sessionStorage.setItem(${JSON.stringify(APP_DEVICE_STORAGE_KEY)},${safeId});}catch(e){}try{history.replaceState(null,'',${parkAt})}catch(e){}try{window[${grantGlobal}]=true}catch(e){}${register}})()</script>`
 }
 
 /**

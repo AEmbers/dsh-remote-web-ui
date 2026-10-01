@@ -496,6 +496,17 @@ describe('/api/pair routes', () => {
     expect(patched).toContain('"dev-1"')
   })
 
+  it('operator: an insecure origin parks the address bar on the tokenless landing, not /', () => {
+    // Given a shell patched for a device (a plain-HTTP LAN page in practice:
+    // no service worker can exist there to own a later navigation to '/').
+    const patched = patchAppShell('<html><head></head><body></body></html>', 'dev-1')
+    // Then the capture script decides by secure-context: '/' only where a
+    // worker can rescue a refresh, the tokenless landing everywhere else.
+    expect(patched).toContain('window.isSecureContext===true&&\'serviceWorker\' in navigator')
+    expect(patched).toContain(`:"${PAIR_PATHS.appPage}"`)
+    expect(patched).not.toContain("history.replaceState(null,'','/')")
+  })
+
   it('publicBaseUrl: issues a public link and trusts the tunneled host on the phone fence', async () => {
     const service = makeService()
     service.setPublicBaseUrl('https://phone.example.com')
