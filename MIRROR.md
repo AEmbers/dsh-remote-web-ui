@@ -1,47 +1,49 @@
-# Standalone mirror of `packages/dsh-remote-web-ui`
+# dsh-remote-web-ui — standalone source & install repo
 
-This repository exists so the plugin can be installed **from GitHub, quickly**:
+Install the plugin straight from here:
 
 ```
 github:AEmbers/dsh-remote-web-ui#main
 ```
 
-The canonical source, the build, and the test suite live in the monorepo
-[`AEmbers/dsh-web`](https://github.com/AEmbers/dsh-web) under
-`packages/dsh-remote-web-ui`. That repository is ~1 GB (skins, market assets,
-other family packages), so fetching it as a git dependency downloads far more
-than this plugin needs and regularly times out. This mirror carries only the
-package tree (~3 MB).
+`lib/index.js`, `lib/invariant.js` and `lib/client.js` are **prebuilt and
+committed**, so a git install needs no build step and no `allowBuilds` entry:
+pnpm refuses to run build scripts for git-hosted packages by default, which is
+exactly what made the original monorepo install fail.
 
-## What differs from the monorepo tree
+## Why this repo exists
 
-- `lib/index.js`, `lib/invariant.js`, `lib/client.js` are **prebuilt and
-  committed**. A git install therefore needs no build step and no
-  `allowBuilds` entry — pnpm refuses to run build scripts for git-hosted
-  packages by default, and the monorepo's own `prepare` pinned its pnpm
-  through corepack, which failed outright on the consumer side.
-- `lib/types/**` (tsc declaration output) is not mirrored: nothing at runtime
-  reads it.
-- The `tsdown.*` / `tsconfig.*` files reference `../../shared/` and only work
-  inside the monorepo. Build there, then sync the result here.
+The plugin used to live in the monorepo `AEmbers/dsh-web` (~1 GB: 16 family
+packages, skins, market assets). Fetching it as a git dependency downloaded the
+whole tree and regularly timed out. This repository carries just the package
+(~2.8 MB) and installs in seconds. The monorepo has since been deleted, so
+**this repository is now the source of truth**.
 
-## Syncing a new version
+## Layout
 
-From a checkout of the monorepo, after `pnpm --filter @linxin666/dsh-remote-web-ui build`:
+- `src/` — TypeScript source: the host half (pairing, LAN approval list,
+  `/api/pair` routes, the `/remote` channel) and the browser half (panel,
+  mobile adapt, remote channel rewrite).
+- `lib/` — prebuilt runtime bundles, committed on purpose (see above).
+- `tests/` and `src/*.test.ts` — the vitest suite (`node_modules/.bin/vitest run`
+  once dependencies are installed; the configs reference the monorepo `shared/`
+  helper described below).
+- Not mirrored: `lib/types/**` (tsc declaration output) — nothing reads it at
+  runtime.
 
-```powershell
-$src = "D:\dsh\dsh-web-fork\packages\dsh-remote-web-ui"
-$dst = "D:\dsh\dsh-remote-web-ui-dist"
-robocopy $src $dst /E /XD node_modules "lib\types" /XF "*.tsbuildinfo" /NFL /NDL /NJH /NJS /NP
-cd $dst
-git add -A
-git commit -m "sync: <what changed>"
-git push origin main
-```
+## Building
 
-Then update the consumer:
+`tsdown.config.ts` / `tsdown.prepare.config.ts` / the `tsconfig.*.json` files
+were written for the monorepo and import `../../shared/tsdown.client.ts`. To
+rebuild the bundles, either build in a monorepo checkout that provides
+`shared/tsdown.client.ts` and copy the result here, or add that file (plus a
+`shared/` sibling directory) to this repository and repoint the two imports.
+
+## Updating a consumer
 
 ```powershell
 cd $env:USERPROFILE\.dsh\profiles\desktop
-pnpm install --no-frozen-lockfile
+pnpm update "@linxin666/dsh-remote-web-ui"
 ```
+
+Then restart DSH: the host half is loaded at boot.
