@@ -72,11 +72,13 @@ export interface RemotePanelProps {
   state: PanelState
   copied: boolean
   copiedToken?: boolean
+  copiedTokenless?: boolean
   onClose(): void
   onStop(): void
   onRefresh(): void
   onCopy(url: string): void
   onCopyToken?(token: string): void
+  onCopyTokenless?(url: string): void
   /** Re-mint the QR against a different LAN address. */
   onPickAddress(address: string): void
   /** Re-mint the QR against the configured public (tunneled) base. */
@@ -121,11 +123,13 @@ export function RemotePanel({
   state,
   copied,
   copiedToken,
+  copiedTokenless,
   onClose,
   onStop,
   onRefresh,
   onCopy,
   onCopyToken,
+  onCopyTokenless,
   onPickAddress,
   onPickPublic,
   onRevoke,
@@ -134,6 +138,20 @@ export function RemotePanel({
   onLanRemove,
   onLanDismiss,
 }: RemotePanelProps) {
+  // The tokenless entry for this LAN origin: the app landing needs no token
+  // once the peer address is on the approval list, so this is the address a
+  // phone can bookmark and reload forever. Built from the QR link's own origin
+  // so a multi-homed host offers the literal the QR was minted against. The
+  // public (tunneled) link is skipped: a tunnel peer arrives from loopback and
+  // is admitted by its pairing cookie, not by an address.
+  const tokenlessUrl = (() => {
+    if (state.kind !== 'ready' || state.public) return undefined
+    try {
+      return `${new URL(state.url).origin}/pair-app`
+    } catch {
+      return undefined
+    }
+  })()
   return (
     <div className={css.panel} role="dialog" aria-modal="true" aria-label={t('title')}>
       <div className={css.header}>
@@ -217,7 +235,25 @@ export function RemotePanel({
                 </button>
               </div>
             )}
+            {tokenlessUrl !== undefined && (
+              <div className={css.pairLinkRow}>
+                <div className={css.pairLinkText}>
+                  <span className={css.pairLinkLabel}>{t('pair.tokenlessLabel')}</span>
+                  <code className={css.link} title={tokenlessUrl}>{tokenlessUrl}</code>
+                </div>
+                <button
+                  type="button"
+                  className={css.copyLink}
+                  aria-label={t('pair.tokenlessLabel')}
+                  onClick={() => onCopyTokenless?.(tokenlessUrl)}
+                >
+                  <IconCopyOutlineRegular size={14} />
+                  {copiedTokenless === true ? t('action.copied') : t('action.copyLink')}
+                </button>
+              </div>
+            )}
           </div>
+          {tokenlessUrl !== undefined && <p className={css.oneTimeHint}>{t('pair.tokenlessHint')}</p>}
           <p className={css.oneTimeHint}>
             {t('pair.oneTimeHint')} {t('pair.dockerHint')}
           </p>
