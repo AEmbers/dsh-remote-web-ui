@@ -1,0 +1,399 @@
+/**
+ * The mobile remote-control panel body: status card (state text + badge),
+ * the QR code, the open-on-phone hint with the link text, and the three
+ * actions (stop / refresh / copy). Pure presentation — all state and
+ * actions arrive through props from the entry's behavior component.
+ */
+import clsx from 'clsx'
+import { memo } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
+import {
+  IconCloseOutlineRegular, IconCopyOutlineRegular, IconRefreshOutlineRegular, IconStopFillRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PairingPhase } from '../pairing.ts'
+import {
+  formatClock,
+  formatLastSeen,
+  type DeviceFrame,
+  type LanAllowlistFrame,
+  type PostureFrame,
+  type RelayStatusFrame,
+  type TunnelStatusFrame,
+} from './pair-api.ts'
+import { deviceNameFromUserAgent } from './device-name.ts'
+import css from './remote.module.css'
+
+/**
+ * The QR symbol, memoized on the link: the panel re-renders on every SSE state
+ * frame (a paired phone heartbeats every 10s), and qrcode.react rebuilds the
+ * SVG path and element tree on each render.
+ */
+const PairQrCode = memo(function PairQrCode({ url, className }: { url: string; className: string }) {
+  return <QRCodeSVG value={url} size={184} level="M" marginSize={1} className={className} />
+})
+
+/** The panel's view state, owned by the entry component. */
+export type PanelState =
+  | { kind: 'lan-required'; tunnel?: TunnelStatusFrame }
+  | { kind: 'loopback-required' }
+  | { kind: 'unreachable' }
+  | {
+      kind: 'ready'
+      url: string
+      expiresAt: number
+      expired: boolean
+      phase: PairingPhase
+      deviceCount: number
+      onlineCount: number
+      /** Authorized devices for the roster under the QR card. */
+      devices: DeviceFrame[]
+      /** The LAN literal the current QR was built from. */
+      address: string
+      /** Every constructible LAN literal (interface order). */
+      lanAddresses: string[]
+      /** The active pairing token itself (useful in Docker/reverse proxy topologies). */
+      token?: string
+      /** Whether this QR is built on the configured public (tunneled) base. */
+      public: boolean
+      /** The configured public (tunneled) base URL, when present. */
+      publicBaseUrl?: string
+      /** Auto-tunnel status, while the auto-tunnel feature is active. */
+      tunnel?: TunnelStatusFrame
+      /** Relay-registry status, while the stable-origin relay is in play. */
+      relay?: RelayStatusFrame
+      /** Latest /api posture probe, once a round has completed. */
+      posture?: PostureFrame
+    }
+
+/** Full panel props: copy + view state + actions. */
+export interface RemotePanelProps {
+  t: TranslateNS<'remote'>
+  state: PanelState
+  copied: boolean
+  copiedToken?: boolean
+  onClose(): void
+  onStop(): void
+  onRefresh(): void
+  onCopy(url: string): void
+  onCopyToken?(token: string): void
+  /** Re-mint the QR against a different LAN address. */
+  onPickAddress(address: string): void
+  /** Re-mint the QR against the configured public (tunneled) base. */
+  onPickPublic(): void
+  /** Revoke one paired device. */
+  onRevoke(deviceId: string): void
+  /**
+   * The LAN approval list, read from the loopback-only endpoint. Absent while
+   * the read has not answered yet (and on a non-loopback origin, where the
+   * endpoint is fenced off and the section is hidden).
+   */
+  lan?: LanAllowlistFrame
+  /** Approve one refused peer: it may then connect without any token. */
+  onLanApprove?(address: string): void
+  /** Remove one approved peer's access. */
+  onLanRemove?(address: string): void
+  /** Forget one refused peer without granting anything. */
+  onLanDismiss?(address: string): void
+}
+
+/** Badge text + tone per phase (ready states only). */
+function statusOf(
+  t: TranslateNS<'remote'>,
+  state: Extract<PanelState, { kind: 'ready' }>,
+): { text: string; tone: 'waiting' | 'connected' | 'disconnected' | 'stopped' } {
+  switch (state.phase) {
+    case 'connected': return { text: t('status.connected', { n: state.onlineCount }), tone: 'connected' }
+    case 'disconnected': return { text: t('status.disconnected'), tone: 'disconnected' }
+    case 'stopped': return { text: t('status.stopped'), tone: 'stopped' }
+    case 'lan-required': return { text: t('status.lanRequired'), tone: 'stopped' }
+    case 'waiting': return { text: t('status.waiting'), tone: 'waiting' }
+  }
+}
+
+/**
+ * Render the pairing panel.
+ * @param props - copy, state, and actions.
+ * @returns the panel element tree.
+ */
+export function RemotePanel({
+  t,
+  state,
+  copied,
+  copiedToken,
+  onClose,
+  onStop,
+  onRefresh,
+  onCopy,
+  onCopyToken,
+  onPickAddress,
+  onPickPublic,
+  onRevoke,
+  lan,
+  onLanApprove,
+  onLanRemove,
+  onLanDismiss,
+}: RemotePanelProps) {
+  return (
+    <div className={css.panel} role="dialog" aria-modal="true" aria-label={t('title')}>
+      <div className={css.header}>
+        <div className={css.heading}>
+          <h2 className={css.title}>{t('title')}</h2>
+          <p className={css.subtitle}>{t('subtitle')}</p>
+        </div>
+        <button type="button" className={css.close} aria-label={t('close.label')} onClick={onClose}>
+          <IconCloseOutlineRegular size={14} />
+        </button>
+      </div>
+
+      {state.kind === 'lan-required' ? (
+        <div className={css.banner} role="alert">
+          <p className={css.bannerTitle}>{t('status.lanRequired')}</p>
+          <p className={css.bannerHint}>{t('status.lanRequiredHint')}</p>
+        </div>
+      ) : state.kind === 'loopback-required' ? (
+        <div className={css.banner} role="alert">
+          <p className={css.bannerTitle}>{t('status.loopbackRequired')}</p>
+          <p className={css.bannerHint}>{t('status.loopbackRequiredHint')}</p>
+        </div>
+      ) : state.kind === 'unreachable' ? (
+        <div className={css.banner} role="alert">
+          <p className={css.bannerTitle}>{t('status.unreachable')}</p>
+          <p className={css.bannerHint}>{t('status.unreachableHint')}</p>
+        </div>
+      ) : (
+        <>
+          {state.posture !== undefined && state.posture.hosts.some(host => host.exposed) && (
+            <div className={css.banner} role="alert">
+              <p className={css.bannerTitle}>{t('posture.exposed')}</p>
+              <p className={css.bannerHint}>
+                {t('posture.exposedHint', { hosts: state.posture.hosts.filter(host => host.exposed).map(host => host.host).join(', ') })}
+              </p>
+            </div>
+          )}
+          <div className={css.card}>
+            <div className={css.cardHeader}>
+              <span className={css.cardTitle}>{t('card.title')}</span>
+              <span className={css.badges}>
+                {state.public && <span className={clsx(css.badge, css.badgePublic)}>{t('public.badge')}</span>}
+                <span className={clsx(css.badge, css[`badge-${statusOf(t, state).tone}`])}>
+                  {statusOf(t, state).text}
+                </span>
+              </span>
+            </div>
+            <div className={css.qrWrap} data-testid="remote-qr">
+              <PairQrCode url={state.url} className={css.qr} />
+            </div>
+            {state.expired
+              ? <p className={css.expired}>{t('pair.expired')}</p>
+              : <p className={css.expiry}>{t('pair.expires', { time: formatClock(state.expiresAt) })}</p>}
+          </div>
+
+          <p className={css.hint}>{state.public ? t('pair.publicHint') : t('pair.hint')}</p>
+          <div className={css.pairLinks}>
+            <div className={css.pairLinkRow}>
+              <div className={css.pairLinkText}>
+                <span className={css.pairLinkLabel}>{t('pair.linkLabel')}</span>
+                <code className={css.link} title={state.url}>{state.url}</code>
+              </div>
+              <button type="button" className={css.copyLink} onClick={() => onCopy(state.url)}>
+                <IconCopyOutlineRegular size={14} />
+                {copied ? t('action.copied') : t('action.copyLink')}
+              </button>
+            </div>
+            {state.token !== undefined && state.token !== '' && (
+              <div className={css.pairLinkRow}>
+                <div className={css.pairLinkText}>
+                  <span className={css.pairLinkLabel}>{t('pair.tokenLabel')}</span>
+                  <code className={css.link} title={state.token}>{state.token}</code>
+                </div>
+                <button
+                  type="button"
+                  className={css.copyLink}
+                  onClick={() => onCopyToken ? onCopyToken(state.token!) : onCopy(state.token!)}
+                >
+                  <IconCopyOutlineRegular size={14} />
+                  {copiedToken ? t('action.copiedToken') : t('action.copyToken')}
+                </button>
+              </div>
+            )}
+          </div>
+          <p className={css.oneTimeHint}>
+            {t('pair.oneTimeHint')} {t('pair.dockerHint')}
+          </p>
+          {state.phase === 'stopped' && <p className={css.stoppedHint}>{t('stopped.hint')}</p>}
+          {state.tunnel !== undefined && state.tunnel.state !== 'running' && (
+            <p className={state.tunnel.state === 'failed' ? css.tunnelFailed : css.tunnelNote} role="status">
+              {state.tunnel.state === 'failed'
+                ? t('tunnel.failed', { error: state.tunnel.error ?? t('tunnel.unknownError') })
+                : t('tunnel.starting')}
+            </p>
+          )}
+          {state.relay?.state === 'registering' && (
+            <p className={css.tunnelNote} role="status">{t('relay.registering')}</p>
+          )}
+          {state.relay?.state === 'failed' && (
+            <p className={css.tunnelFailed} role="status">
+              {t('relay.failed', { error: state.relay.error ?? t('tunnel.unknownError') })}
+            </p>
+          )}
+
+          {(state.publicBaseUrl !== undefined || state.lanAddresses.length > 1) && (
+            <fieldset className={css.addresses}>
+              <legend>{t('address.label')}</legend>
+              {state.publicBaseUrl !== undefined && (
+                <label key="public" className={css.address}>
+                  <input
+                    type="radio"
+                    name="lan-address"
+                    aria-label={t('address.public')}
+                    checked={state.public}
+                    onChange={onPickPublic}
+                  />
+                  <span>{t('address.public')}</span>
+                  <code className={css.addressValue}>{state.publicBaseUrl}</code>
+                </label>
+              )}
+              {state.lanAddresses.map(address => (
+                <label key={address} className={css.address}>
+                  <input
+                    type="radio"
+                    name="lan-address"
+                    aria-label={address}
+                    checked={!state.public && address === state.address}
+                    onChange={() => onPickAddress(address)}
+                  />
+                  <span>{t('address.lan')}</span>
+                  <code className={css.addressValue}>{address}</code>
+                </label>
+              ))}
+              <p className={css.addressHint}>{t('address.hint')}</p>
+            </fieldset>
+          )}
+
+          <div className={css.actions}>
+            <button type="button" className={css.action} onClick={onStop}>
+              <IconStopFillRegular size={14} />
+              {t('action.stop')}
+            </button>
+            <button type="button" className={css.action} onClick={onRefresh}>
+              <IconRefreshOutlineRegular size={14} />
+              {t('action.refresh')}
+            </button>
+          </div>
+
+          <section className={css.devices} data-testid="remote-devices" aria-label={t('devices.title')}>
+            <h3 className={css.devicesTitle}>{t('devices.title')}</h3>
+            {state.devices.length === 0 ? (
+              <p className={css.devicesEmpty}>{t('devices.empty')}</p>
+            ) : (
+              <ul className={css.deviceList}>
+                {state.devices.map(device => (
+                  <li key={device.id} className={css.deviceRow}>
+                    <div className={css.deviceMeta}>
+                      <span className={css.deviceName}>
+                        {deviceNameFromUserAgent(device.userAgent) ?? t('devices.unknown')}
+                      </span>
+                      <span className={clsx(css.devicePresence, device.online ? css.deviceOnline : css.deviceOffline)}>
+                        {device.online ? t('devices.online') : t('devices.offline')}
+                      </span>
+                      <span className={css.deviceSeen}>
+                        {t('devices.lastSeen', { time: formatLastSeen(device.lastSeenAt) })}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={css.deviceRevoke}
+                      aria-label={t('devices.revoke.label')}
+                      onClick={() => { onRevoke(device.id) }}
+                    >
+                      {t('devices.revoke')}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          {lan !== undefined && (
+            <section className={css.devices} data-testid="remote-lan" aria-label={t('lanAllow.title')}>
+              <h3 className={css.devicesTitle}>{t('lanAllow.title')}</h3>
+              <p className={css.devicesEmpty}>
+                {lan.available === false
+                  ? t('lanAllow.unavailable')
+                  : lan.enabled ? t('lanAllow.on') : t('lanAllow.off')}
+              </p>
+              <h4 className={css.devicesTitle}>{t('lanAllow.pendingTitle')}</h4>
+              {lan.pending.length === 0 ? (
+                <p className={css.devicesEmpty}>{t('lanAllow.pendingEmpty')}</p>
+              ) : (
+                <ul className={css.deviceList}>
+                  {lan.pending.map(entry => (
+                    <li key={entry.address} className={css.deviceRow}>
+                      <div className={css.deviceMeta}>
+                        <span className={css.deviceName}>
+                          {deviceNameFromUserAgent(entry.userAgent) ?? t('devices.unknown')}
+                        </span>
+                        <code className={css.link}>{entry.address}</code>
+                        <span className={css.deviceSeen}>{t('lanAllow.hits', { n: entry.hits })}</span>
+                        <span className={css.deviceSeen}>
+                          {t('devices.lastSeen', { time: formatLastSeen(entry.lastSeenAt) })}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className={css.deviceRevoke}
+                        aria-label={t('lanAllow.approve.label')}
+                        onClick={() => { onLanApprove?.(entry.address) }}
+                      >
+                        {t('lanAllow.approve')}
+                      </button>
+                      <button
+                        type="button"
+                        className={css.deviceRevoke}
+                        aria-label={t('lanAllow.dismiss.label')}
+                        onClick={() => { onLanDismiss?.(entry.address) }}
+                      >
+                        {t('lanAllow.dismiss')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <h4 className={css.devicesTitle}>{t('lanAllow.approvedTitle')}</h4>
+              {lan.entries.length === 0 ? (
+                <p className={css.devicesEmpty}>{t('lanAllow.approvedEmpty')}</p>
+              ) : (
+                <ul className={css.deviceList}>
+                  {lan.entries.map(entry => (
+                    <li key={entry.rule ?? entry.address} className={css.deviceRow}>
+                      <div className={css.deviceMeta}>
+                        <span className={css.deviceName}>
+                          {entry.label ?? deviceNameFromUserAgent(entry.userAgent) ?? t('devices.unknown')}
+                        </span>
+                        <code className={css.link}>{entry.rule ?? entry.address}</code>
+                        {entry.rule !== undefined && (
+                          <span className={css.deviceSeen}>{t('lanAllow.rule')}</span>
+                        )}
+                        <span className={css.deviceSeen}>
+                          {t('devices.lastSeen', { time: formatLastSeen(entry.lastSeenAt) })}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className={css.deviceRevoke}
+                        aria-label={t('lanAllow.remove.label')}
+                        onClick={() => { onLanRemove?.(entry.rule ?? entry.address) }}
+                      >
+                        {t('lanAllow.remove')}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  )
+}

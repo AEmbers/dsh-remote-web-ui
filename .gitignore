@@ -1,0 +1,6 @@
+lib/*
+!lib/index.js
+!lib/invariant.js
+!lib/client.js
+node_modules/
+*.tsbuildinfo
