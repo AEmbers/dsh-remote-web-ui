@@ -80,6 +80,7 @@ export function RemoteEntry({ wide, t }: RemoteEntryProps) {
   useEffect(() => { stateRef.current = state }, [state])
   const [copied, setCopied] = useState<boolean>(false)
   const [copiedToken, setCopiedToken] = useState<boolean>(false)
+  const [copiedTokenless, setCopiedTokenless] = useState<boolean>(false)
   const eventSource = useRef<EventSource | undefined>(undefined)
   // Generation counter for the open flow: closing (or re-opening) the panel
   // bumps it, so an in-flight issue() that resolves after a close does not
@@ -247,6 +248,16 @@ export function RemoteEntry({ wide, t }: RemoteEntryProps) {
     })
   }, [])
 
+  // The tokenless LAN entry has its own "copied" flag so the two link rows
+  // never both read "copied" at once (they are separate targets).
+  const handleCopyTokenless = useCallback((url: string) => {
+    void copyText(url).then((ok) => {
+      if (!ok) return
+      setCopiedTokenless(true)
+      window.setTimeout(() => { setCopiedTokenless(false) }, 1500)
+    })
+  }, [])
+
   const [lan, setLan] = useState<LanAllowlistFrame | undefined>(undefined)
 
   // The approval list lives behind a loopback-only endpoint, so only the
@@ -293,11 +304,13 @@ export function RemoteEntry({ wide, t }: RemoteEntryProps) {
             state={state}
             copied={copied}
             copiedToken={copiedToken}
+            copiedTokenless={copiedTokenless}
             onClose={closePanel}
             onStop={handleStop}
             onRefresh={handleRefresh}
             onCopy={handleCopy}
             onCopyToken={handleCopyToken}
+            onCopyTokenless={handleCopyTokenless}
             onPickAddress={handlePickAddress}
             onPickPublic={handlePickPublic}
             onRevoke={handleRevoke}
